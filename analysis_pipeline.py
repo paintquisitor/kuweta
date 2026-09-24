@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from qwen import ModelUnavailable, analyze_images
 from recordings import iso
 from focus_analysis import bounds, inspect_focus
-from cat_identity import identify_visit
+from cat_identity import identify_visit, identity_samples
 from runtime_paths import recordings_path
 
 STEP = 2  # Seconds; observed intervals are approximate, never exact entry/exit.
@@ -252,7 +252,11 @@ def analyze_recording(path, regions, stopped=lambda: False, progress=lambda mess
         identity = {'cat_id': 'unknown', 'reason': 'Brak wzorców kotów.'}
         if identity_profiles is not None:
             progress('Porównywanie sylwetki i ogona ze wzorcami Kalinki i Kefira')
-            identity = identify_visit(path, visit, crop, identity_profiles, frame)
+            sampling = identity_samples(visit, observations,
+                (presence_stats or {}).get('motion', []),
+                next(i for i, b in enumerate(sorted(regions['boxes'], key=lambda b: b['id']))
+                     if b['id'] == visit['box_id']))
+            identity = identify_visit(path, visit, crop, identity_profiles, frame, sampling=sampling)
         visit['identity'] = identity
         visit['cat_id'] = identity['cat_id']
         identity_note = ('Kot nierozpoznany. ' if visit['cat_id'] == 'unknown' else

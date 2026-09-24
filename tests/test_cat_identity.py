@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from cat_identity import decide, identify_visit, identity_crop, load_profiles
+from cat_identity import decide, identify_visit, identity_crop, load_profiles, identity_samples
 from qwen import ModelUnavailable
 
 
@@ -98,3 +98,25 @@ class CatIdentityTests(unittest.TestCase):
         with patch('cat_identity.analyze_images') as model:
             self.assertEqual(self.identify()['cat_id'], 'unknown')
             model.assert_not_called()
+
+    def test_stationary_sampling_prefers_longest_occupied_run_in_correct_tray(self):
+        obs = [dict(t=t, cat_visible=True, boxes=[1], uncertain=False) for t in range(0, 41, 2)]
+        motion = [dict(t=t, motion=[.01 if t <= 8 or t >= 20 else .4, .9])
+                  for t in range(0, 41, 2)]
+        sampling = identity_samples(self.visit, obs, motion, 0)
+        self.assertEqual(sampling['stationary_span'], [18, 40])
+        self.assertEqual(sampling['times'], [22, 30, 36])
+        self.assertEqual(identity_samples(self.visit, obs, motion, 1)['method'], 'evenly_spaced')
+        with patch('cat_identity.analyze_images', return_value=json.dumps(observation())):
+            reader = Mock(return_value=('image/jpeg', b'target'))
+            self.assertEqual(self.identify(reader, sampling=sampling)['sample_times'], [22, 30, 36])
+            self.assertEqual([c.args[1] for c in reader.call_args_list], [22, 30, 36])
+
+    def test_empty_uncertain_and_missing_samples_break_stationary_run(self):
+        motion = [dict(t=t, motion=[0, 0]) for t in range(0, 41, 2)]
+        self.assertEqual(identity_samples(self.visit, [], motion)['method'], 'evenly_spaced')
+        obs = [dict(t=t, cat_visible=True, boxes=[1], uncertain=False,
+                    uncertain_boxes=[1] if t % 6 == 0 else []) for t in range(0, 41, 2)]
+        self.assertEqual(identity_samples(self.visit, obs, motion)['method'], 'evenly_spaced')
+        obs = [dict(t=t, cat_visible=True, boxes=[1], uncertain=False) for t in (0, 2, 4, 12, 14, 16)]
+        self.assertEqual(identity_samples(self.visit, obs, [r for r in motion if r['t'] in (0,2,4,12,14,16)])['method'], 'evenly_spaced')

@@ -64,7 +64,46 @@ def decide(reply, count):
     return 'unknown', 'Brak co najmniej dwóch zgodnych, wyraźnych ujęć sylwetki i ogona.'
 
 
-def identify_visit(path, visit, polygon, manifest, frame_reader):
+def identity_samples(visit, observations=(), motion=(), box_index=0):
+    """Prefer sustained occupied stillness; it is not evidence of elimination."""
+    first, last = visit['first'], visit['last']
+    fallback = {'method': 'evenly_spaced', 'times': [round(first + (last-first)*p, 2)
+                                                  for p in (.2, .5, .8)]}
+    occupied = {o['t'] for o in observations if o.get('cat_visible')
+                and visit['box_id'] in o.get('boxes', []) and not o.get('uncertain')
+                and visit['box_id'] not in o.get('uncertain_boxes', [])}
+    runs, run = [], []
+    previous = None
+    for row in sorted(motion, key=lambda r: r['t']):
+        t = row['t']
+        valid = first <= t <= last and t in occupied
+        # Motion at t compares t with the preceding sample. Never bridge a
+        # missing observation, a tray change or an uncertain presence.
+        connected = (valid and previous is not None and previous in occupied
+                     and first <= previous and 0 < t-previous <= 2.1
+                     and row['motion'][box_index] <= .04)
+        if connected:
+            if not run:
+                run = [previous]
+            run.append(t)
+        else:
+            if run:
+                runs.append(run)
+            run = []
+        previous = t if valid else None
+    if run:
+        runs.append(run)
+    runs = [r for r in runs if r[-1]-r[0] >= 6]
+    if not runs:
+        return fallback
+    best = max(runs, key=lambda r: r[-1]-r[0])
+    # Use actual sampled times, away from the entry/exit edges when possible.
+    times = [best[round((len(best)-1)*p)] for p in (.2, .5, .8)]
+    return {'method': 'opencv_stationary', 'times': times,
+            'stationary_span': [best[0], best[-1]], 'motion_limit': .04}
+
+
+def identify_visit(path, visit, polygon, manifest, frame_reader, *, sampling=None):
     result = {'cat_id': 'unknown', 'method': METHOD, 'source': 'automatic'}
     try:
         profiles, images, labels = load_profiles(manifest)
@@ -73,9 +112,10 @@ def identify_visit(path, visit, polygon, manifest, frame_reader):
     first, last = visit['first'], visit['last']
     if last - first < 4:
         return dict(result, reason='Za krótka obserwacja do porównania kilku ujęć kota.')
-    times = [round(first + (last - first) * part, 2) for part in (.2, .5, .8)]
+    sampling = sampling or identity_samples(visit)
+    times = sampling['times']
     crop = identity_crop(polygon)
-    result.update(sample_times=times, reference_set=profiles['id'], reference_images=labels)
+    result.update(sample_times=times, sampling=sampling, reference_set=profiles['id'], reference_images=labels)
     context = (
         f'Pierwsze {len(images)} obrazów to podpisane WZORCE, nie klasyfikuj ich. Podpisy: ' + json.dumps(labels, ensure_ascii=False)
         + f'. TYLKO ostatni obraz (numer {len(images)+1}) przedstawia kota DO ROZPOZNANIA. '
