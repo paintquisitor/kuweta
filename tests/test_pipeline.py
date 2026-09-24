@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from analysis_pipeline import AnalysisPipeline, ProcessingError, analyze_recording, frame, intervals, validate_presence, waste_result, observe_presence, join_visit_segments
+from analysis_pipeline import AnalysisPipeline, ProcessingError, analyze_recording, frame, intervals, validate_presence, waste_result, observe_presence, join_visit_segments, structured
 from server import Store
 from focus_analysis import bounds, focus_windows, rear_point, tray_region, posture_suggestions, inspect_focus
 from qwen import ModelUnavailable
@@ -28,7 +28,12 @@ class PipelineTests(unittest.TestCase):
         self.store.db.close()
         self.temp.cleanup()
 
-    def test_tray_crops_assign_ids_and_map_tail_back_to_camera(self):
+    def test_structured_accepts_qwen_json_with_trailing_backtick(self):
+        reply = {'frames': [{'occupied': False, 'uncertain': False}]}
+        with patch('analysis_pipeline.analyze_images', return_value=json.dumps(reply) + '`'):
+            self.assertEqual(structured([('image/jpeg', b'image')], 'context'), reply)
+
+    def test_tray_crops_assign_ids_and_ignore_tail_coordinates(self):
         reply = {'frames': [dict(occupied=False, uncertain=True, tail_base_point=None),
                             dict(occupied=True, uncertain=False, tail_base_point=[.5, .25])]}
         with patch('analysis_pipeline.frame', return_value=('image/jpeg', b'crop')) as reader, \
@@ -39,16 +44,18 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c.args[2] for c in reader.call_args_list],
                          [b['points'] for b in self.regions['boxes']])
         point = rear_point(observation, 2, self.regions['boxes'][1]['points'])
-        self.assertAlmostEqual(point[0], .7925)
-        self.assertAlmostEqual(point[1], .25)
+        self.assertIsNone(point)
         with patch('analysis_pipeline.frame', return_value=('image/jpeg', b'crop')), \
              patch('analysis_pipeline.structured', side_effect=[ValueError('Invalid JSON'), reply]) as model:
             self.assertEqual(observe_presence('clip.mp4', 12, self.regions)['boxes'], [2])
             self.assertEqual(model.call_count, 2)
         for malformed in ({'frames': []}, {'frames': [reply['frames'][0], {'occupied': 'yes', 'uncertain': False}]}):
             with patch('analysis_pipeline.frame', return_value=('image/jpeg', b'crop')), \
-                 patch('analysis_pipeline.structured', return_value=malformed), self.assertRaises(ValueError):
-                observe_presence('clip.mp4', 12, self.regions)
+                 patch('analysis_pipeline.structured', return_value=malformed) as model:
+                observation = observe_presence('clip.mp4', 12, self.regions)
+                self.assertTrue(observation['uncertain'])
+                self.assertEqual(observation['uncertain_boxes'], [1, 2])
+                self.assertEqual(model.call_count, 3)
 
     def test_visit_survives_single_missed_sample_but_real_exit_splits_it(self):
         def observations(boxes):
@@ -120,7 +127,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(session['exited_at'], c['exited_at'])
         self.assertEqual((session['outcome'], session['box_id'], session['region']), ('confirmed', 1, 4))
         self.assertEqual([a, b, c], original)
-        self.assertEqual(len(join_visit_segments([a, part(1, cat='kalinka'), part(2, cat='unknown')])), 3)
+        mixed_identity_session, = join_visit_segments([a, part(1, cat='kalinka'), part(2, cat='unknown')])
+        self.assertEqual(len(mixed_identity_session['segments']), 3)
+        self.assertEqual(mixed_identity_session['cat_id'], 'kefir')
         other = dict(b, id='d'*24+'-0')
         self.assertEqual(len(join_visit_segments([a, other])), 2)
         a.update(reviewed_at=None, outcome='urine', region=2)
@@ -149,27 +158,6 @@ class PipelineTests(unittest.TestCase):
         saved = json.loads(state['recordings']['items'][0]['analysis'])
         self.assertGreater(saved['completed_at'], before['reviewed_at'])
         self.assertEqual(saved['visits'][0]['focus']['suggestions'], [{'point': [.3, .5], 'region': 3}])
-
-    def test_posture_suggestion_without_baseline_never_confirms_waste(self):
-        path = Path(self.temp.name) / 'recording.mp4'
-        presence = [dict(cat_visible=True, boxes=[1], uncertain=False,
-                         rear=[{'box_id': 1, 'point': [.2, .5]}]) for _ in range(4)]
-        presence += [dict(cat_visible=False, boxes=[], uncertain=False) for _ in range(2)]
-        hidden = dict(before_after_clear=False, urine=False, feces=False,
-                      urine_region=None, feces_region=None, notes='Kot zasłania miejsce.')
-        pose = dict(tail_base_clear=True, head_point=[.5, .9], tail_base_point=[.2/.415, .5])
-        with patch('analysis_pipeline.probe', return_value=12), \
-             patch('analysis_pipeline.frame', return_value=('image/jpeg', b'posture-frame')), \
-             patch('analysis_pipeline.observe_presence', side_effect=presence), \
-             patch('analysis_pipeline.structured', side_effect=[hidden, pose, pose, pose]):
-            result = analyze_recording(path, self.regions)
-        visit = result['visits'][0]
-        self.assertEqual((visit['outcome'], visit['region'], visit['feces_region']), ('uncertain', None, None))
-        self.assertEqual(visit['focus']['evidence'], [])
-        suggestion, = visit['focus']['suggestions']
-        self.assertEqual((suggestion['kind'], suggestion['source'], suggestion['t'], suggestion['region']),
-                         ('unknown', 'posture', 3, 4))
-        self.assertEqual((path.parent / suggestion['file']).read_bytes(), b'posture-frame')
 
     def test_posture_suggestions_prefer_longer_stop_and_skip_brief_or_duplicate_regions(self):
         path = Path(self.temp.name) / 'recording.mp4'
@@ -336,7 +324,7 @@ class PipelineTests(unittest.TestCase):
         self.pipeline.complete(self.pipeline.take(), result, 'c' * 24)
         self.assertEqual(self.store.snapshot()['visits'], [])
 
-    def test_visible_cat_visit_requires_consecutive_samples_and_valid_waste_evidence(self):
+    def test_visible_cat_visit_does_not_analyze_waste(self):
         presence = {'frames': [{'cat_visible': bool(boxes), 'boxes': boxes, 'uncertain': False}
                                 for boxes in ([], [1], [1], [], [])]}
         waste = {'before_after_clear': True, 'urine': True, 'feces': True,
@@ -344,11 +332,12 @@ class PipelineTests(unittest.TestCase):
         with patch('analysis_pipeline.probe', return_value=10), \
              patch('analysis_pipeline.frame', return_value=('image/jpeg', b'frame')), \
              patch('analysis_pipeline.observe_presence', side_effect=presence['frames']), \
-             patch('analysis_pipeline.structured', side_effect=[waste]):
+             patch('analysis_pipeline.structured', side_effect=AssertionError('Unexpected waste analysis')) as model:
             result = analyze_recording('unused.mp4', self.regions)
         visit = result['visits'][0]
-        self.assertEqual((visit['first'], visit['last'], visit['outcome']), (2, 4, 'both'))
-        self.assertEqual((visit['region'], visit['feces_region']), (0, 8))
+        self.assertEqual((visit['first'], visit['last'], visit['outcome']), (2, 4, 'uncertain'))
+        self.assertEqual((visit['region'], visit['feces_region']), (None, None))
+        model.assert_not_called()
         self.assertEqual(visit['cat_id'], 'unknown')
         waste['before_after_clear'] = False
         self.assertEqual(waste_result(waste)['outcome'], 'uncertain')
@@ -396,41 +385,22 @@ class PipelineTests(unittest.TestCase):
                 self.assertLessEqual(dimensions['width'], min(1024, int((right-left)*1600)))
                 self.assertLessEqual(dimensions['height'], min(1024, int((bottom-top)*1200)))
 
-    def test_fixed_area_keeps_brief_evidence_after_burying(self):
-        frames = [
-            {'cat_visible': False, 'boxes': [], 'uncertain': False},
-            *[{'cat_visible': True, 'boxes': [1], 'uncertain': False,
-               'rear': [{'box_id': 1, 'point': p}]} for p in ([.2,.5], [.2,.5], [.35,.8])],
-            {'cat_visible': False, 'boxes': [], 'uncertain': False}]
-        hidden = {'before_after_clear': False, 'urine': False, 'feces': False,
-                  'urine_region': None, 'feces_region': None, 'notes': 'Ślad zasłonięty'}
-        visible = dict(hidden, before_after_clear=True, urine=True, urine_region=4, notes='Nowa mokra plama')
-        pose = dict(tail_base_clear=True, head_point=[.5, .9], tail_base_point=[.2/.415, .5])
-        path = Path(self.temp.name) / 'recording.mp4'
-        with patch('analysis_pipeline.probe', return_value=10), \
-             patch('analysis_pipeline.frame', return_value=('image/jpeg', b'evidence')), \
-             patch('focus_analysis.motion_samples', return_value=([4.2, 4.4], 21)), \
-             patch('analysis_pipeline.observe_presence', side_effect=frames), \
-             patch('analysis_pipeline.structured', side_effect=[hidden, pose, pose, pose, visible, hidden]):
-            result = analyze_recording(path, self.regions)
-        visit = result['visits'][0]
-        self.assertEqual(visit['outcome'], 'urine')
-        self.assertEqual(visit['region'], 4)
-        self.assertAlmostEqual(visit['focus']['windows'][0]['point'][0], .2)
-        self.assertAlmostEqual(visit['focus']['windows'][0]['point'][1], .5)
-        evidence = visit['focus']['evidence'][0]
-        self.assertEqual(evidence['t'], 4.2)
-        self.assertEqual((path.parent / evidence['file']).read_bytes(), b'evidence')
-        self.assertEqual((path.parent / evidence['before_file']).read_bytes(), b'evidence')
-        # Posture + burying without visible evidence must remain uncertain.
-        with patch('analysis_pipeline.probe', return_value=10), \
-             patch('analysis_pipeline.frame', return_value=('image/jpeg', b'frame')), \
-             patch('focus_analysis.motion_samples', return_value=([4.2], 21)), \
-             patch('analysis_pipeline.observe_presence', side_effect=frames), \
-             patch('analysis_pipeline.structured', side_effect=[hidden, pose, pose, pose, hidden]):
-            uncertain = analyze_recording(path, self.regions)['visits'][0]
-        self.assertEqual(uncertain['outcome'], 'uncertain')
-        self.assertEqual(uncertain['focus']['evidence'], [])
+    def test_legacy_tail_observations_cannot_trigger_anatomy_or_waste_analysis(self):
+        observations = [dict(cat_visible=True, boxes=[1], uncertain=False,
+                             rear=[{'box_id': 1, 'point': point}])
+                        for point in ([.2, .5], [.2, .5], [.35, .8])]
+        with patch('analysis_pipeline.probe', return_value=6), \
+             patch('analysis_pipeline.observe_presence', side_effect=observations), \
+             patch('analysis_pipeline.structured') as model, \
+             patch('focus_analysis.inspect_focus') as focus:
+            result = analyze_recording('unused.mp4', self.regions)
+        model.assert_not_called()
+        focus.assert_not_called()
+        visit, = result['visits']
+        self.assertEqual(visit['outcome'], 'uncertain')
+        self.assertEqual(visit['focus'], {'enabled': False})
+        self.assertIsNone(visit['region'])
+        self.assertIsNone(visit['feces_region'])
 
     def test_invalid_rear_locations_and_motion_do_not_create_stationary_area(self):
         polygon = self.regions['boxes'][0]['points']

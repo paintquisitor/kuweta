@@ -390,6 +390,14 @@ class QwenAdapterTests(unittest.TestCase):
         self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
         self.assertTrue(payload["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
 
+    def test_adapter_rejects_disabled_anatomy_and_waste_tasks(self):
+        with patch.dict(os.environ, {'QWEN_BASE_URL': 'http://localhost:1234/v1'}), \
+             patch('qwen.urlopen') as request:
+            for task in ('anatomy', 'litter'):
+                with self.subTest(task=task), self.assertRaises(ValueError):
+                    analyze_images([('image/jpeg', b'image')], 'test', task=task)
+            request.assert_not_called()
+
     def test_adapter_rejects_reasoning_without_image_observations(self):
         for content in (None, "", "   "):
             with self.subTest(content=content):

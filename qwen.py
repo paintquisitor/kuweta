@@ -19,7 +19,7 @@ def configuration():
             "model": os.getenv("QWEN_MODEL", "qwen"), "used_in_simulation": False}
 
 
-def analyze_images(images, context, *, json_output=False, task='litter', image_labels=None):
+def analyze_images(images, context, *, json_output=False, task='identity', image_labels=None):
     """Analyze [(mime, bytes), ...]; caller must supply actual evidence images."""
     base = os.getenv("QWEN_BASE_URL", "").rstrip("/")
     if not base:
@@ -29,26 +29,16 @@ def analyze_images(images, context, *, json_output=False, task='litter', image_l
     if image_labels is not None and (len(image_labels) != len(images) or
                                     any(not isinstance(label, str) for label in image_labels)):
         raise ValueError('Podpisy muszą odpowiadać obrazom')
-    if task not in ('litter', 'identity', 'anatomy'):
-        raise ValueError('Nieznane zadanie analizy')
+    if task not in ('presence', 'identity'):
+        raise ValueError('Obsługiwane jest tylko wykrywanie i rozpoznawanie kota')
     instructions = (
-        "Przeanalizuj obrazy kuwety w kolejności czasowej. Opisz tylko widoczne fakty. "
-        "Ciemna plama, kucanie i kopanie nie są samodzielnym potwierdzeniem moczu. "
-        "Oceń osobno oznaki moczu (nowa mokra plama) i kału (nowe bryły odchodów), "
-        "uwzględniając możliwość obu podczas jednej wizyty. Duża bryła może być też grudką żwirku. "
-        "Porównaj stan przed wizytą, podczas niej i po niej; nie przypisuj starych odchodów nowej wizycie. "
-        "Podaj osobno położenie i pewność każdej obserwacji. Zakopanie lub brak widoczności "
-        "oznacza wynik niepewny, a nie dowód braku moczu lub kału. "
-        "Wskaż zasłonięcia i niepewność. Nie diagnozuj. ") if task == 'litter' else (
+        'Sprawdź wyłącznie obecność kota w kuwecie. Opisz tylko widoczne fakty. '
+        'Nie oceniaj nasady ogona, moczu ani kału. '
+    ) if task == 'presence' else (
         'Porównaj tożsamość kotów z oznaczonymi obrazami wzorcowymi. '
         'Opieraj się wyłącznie na widocznej sylwetce, ogonie i sierści; nie zgaduj. '
         'Obrazy wzorcowe i obrazy do oceny to osobne grupy, nie sekwencja jednej wizyty. ')
     content = [{"type": "text", "text": instructions + 'Kontekst: ' + context}]
-    if task == 'anatomy':
-        content = [{"type": "text", "text":
-                    'Locate visible cat anatomy in the supplied image. Evaluate each landmark independently. '
-                    'Report uncertain estimates explicitly; use null for landmarks you cannot locate. '
-                    'This task does not classify waste or identify the cat. ' + context}]
     for index, (mime, data) in enumerate(images):
         if mime not in ("image/jpeg", "image/png", "image/webp") or len(data) > 5_000_000:
             raise ValueError("Nieobsługiwany lub zbyt duży obraz")

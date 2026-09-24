@@ -301,24 +301,7 @@ function focusEvidence(v) {
   if (v.segments?.length > 1) {
     return `<section><h3>Jedna wizyta · ${v.segments.length} fragmenty obserwacji</h3><p>Przejścia między kuwetami w tym samym filmie należą do jednej wizyty. Poniżej są jej fragmenty; historia i podsumowanie liczą wizytę jeden raz.</p>${v.segments.map((segment, i) => `<h4>Fragment ${i + 1} · kuweta ${segment.box_id || v.box_id} · ${time(segment.entered_at, true)}–${time(segment.exited_at, true)}</h4><p><a href="/api/recordings/${encodeURIComponent(segment.id.split("-")[0])}/video" target="_blank" rel="noopener">Otwórz film ${i + 1}</a></p>${focusEvidence({...v, ...segment, segments: null})}`).join("")}</section>`;
   }
-  const [key, index] = v.id.split("-");
-  const recording = state.recordings?.items.find(r => r.media_key === key);
-  if (!recording?.analysis) return "";
-  const analysis = JSON.parse(recording.analysis);
-  const focus = analysis.visits?.[Number(index)]?.focus;
-  const anatomy = anatomyEvidence(focus, key);
-  const newerAnalysis = v.reviewed_at && analysis.completed_at && new Date(analysis.completed_at) > new Date(v.reviewed_at);
-  const analysisNotice = newerAnalysis ? `<p class="muted">Ponowna analiza · ${time(analysis.completed_at)}. Twoje oznaczenia M/K pozostają zapisane osobno.</p>` : "";
-  if (!focus?.windows?.length) return `${anatomy}${newerAnalysis ? `${analysisNotice}<p>Samo wskazanie nasady ogona Z nie potwierdza miejsca moczu. Automatyczna analiza śladów nie ustaliła go dla tej wizyty.</p>` : ""}`;
-  const acceptedChecks = (focus.pose_checks || []).filter(c => c.accepted && c.verification === "temporal_tail_base");
-  const suggestion = acceptedChecks.length
-    ? anatomyEvidence({...focus, pose_checks: acceptedChecks}, key, true)
-    : "<p>Brak zweryfikowanej sugestii Z. Wcześniejszy obszar analizy nie jest wskazaniem nasady ogona.</p>";
-  const previousAnalysis = v.reviewed_at && !newerAnalysis;
-  return `${analysisNotice}${suggestion}<details><summary>Wszystkie wskazania Qwena · szczegóły weryfikacji</summary>${anatomy}</details>${previousAnalysis ? "<details><summary>Pierwotna analiza modelu · przed ręczną oceną</summary>" : ""}<section class="focus-evidence"><h3>Analiza śladów wokół wskazanego miejsca</h3><p>Samo wskazanie nasady ogona Z nie potwierdza oddania moczu ani kału.</p>${focus.evidence.length ? focus.evidence.map(e => {
-    const url = `/api/recordings/${encodeURIComponent(key)}/evidence/`;
-    return `<h4>${e.kind === "urine" ? "Prawdopodobny mocz" : "Prawdopodobny kał"} · ${escape(e.t)} s filmu</h4><div class="evidence-pair"><figure><img loading="lazy" src="${url}${encodeURIComponent(e.before_file)}" alt="Stały obszar przed wizytą"><figcaption>Przed wizytą · ${escape(e.before_t)} s</figcaption></figure><figure><img loading="lazy" src="${url}${encodeURIComponent(e.file)}" alt="Ten sam obszar z możliwym śladem"><figcaption>Zaobserwowany ślad · ${escape(e.t)} s</figcaption></figure></div><p>${escape(e.note)} <a href="/api/recordings/${encodeURIComponent(key)}/video#t=${encodeURIComponent(e.t)}" target="_blank" rel="noopener">Zobacz moment w filmie</a></p>`;
-  }).join("") : "<p>Nie znaleziono jednoznacznego śladu w wybranych klatkach tego obszaru.</p>"}${focus.limited ? "<p>Analiza śladów obejmuje maksymalnie 3 fragmenty. Pozostałe wymagają ręcznej oceny.</p>" : ""}</section>${previousAnalysis ? "</details>" : ""}`;
+  return '<p class="muted">Automatyczna analiza nasady ogona, moczu i kału jest wyłączona. Qwen wykrywa obecność kota i rozpoznaje jego tożsamość. Wynik wizyty możesz ocenić ręcznie poniżej.</p>';
 }
 
 async function loadTailEditor(visitId, cat) {
@@ -507,7 +490,7 @@ function openVisit(id, refresh = false) {
   const explanation = v.source === "camera" ? escape(v.note) : active ? "Trwa symulacja. Wynik pojawi się po wyjściu kota." :
     `${explanations[v.original_outcome] || explanations.uncertain} Nie analizowano obrazu ani filmu.`;
   $("#visit-detail").innerHTML =
-    `<span class="result ${active ? "active" : v.outcome}">${active ? "Wizyta trwa" : escape(state.outcomes[v.outcome])}</span><div class="detail-stats"><div><span>${v.source === "camera" ? "Pierwsza obserwacja" : "Wejście"} · ${dateLabel(v.entered_at)}</span><strong>${time(v.entered_at, true)}</strong></div><div><span>${v.source === "camera" ? "Ostatnia obserwacja" : "Wyjście"}</span><strong>${time(v.exited_at, true)}</strong></div><div><span>${v.source === "camera" ? "Obserwowany okres" : "Czas w kuwecie"}</span><strong ${active ? `data-duration="${v.id}"` : ""}>${duration(v)}</strong></div></div>${v.source === "camera" ? '<section id="tail-editor" class="posture-review"><h3>Popraw położenie Z</h3><p>Wczytywanie klatek…</p></section>' : ""}${focusEvidence(v)}${v.source === "camera" ? `<section class="saved-visit-assessment"><h3>${v.reviewed_at ? "Zapisana ocena użytkownika · M/K" : "Zapisany wynik wizyty"}</h3><p>${v.reviewed_at ? "Poniższy schemat przedstawia Twoje zapisane oznaczenia. Sugestia Qwena Z jest pokazana osobno na zdjęciu powyżej." : "Schemat przedstawia zapisany wynik analizy wizyty."}</p>` : ""}<div class="detail-map">${mapSvg({ id: v.box_id }, [v], active ? v : null, true)}</div><p class="detail-note">${v.source === "camera" && v.reviewed_at ? "<strong>Zapisana wcześniej ocena</strong><br>" : ""}${explanation}<br>Mocz: <strong>${locationLabel(v, "urine")}</strong>. Kał: <strong>${locationLabel(v, "feces")}</strong>. ${v.source === "camera" ? `Film źródłowy znajdziesz w sekcji nagrań. <a href="/api/recordings/${v.id.split("-")[0]}/video" target="_blank" rel="noopener">Otwórz film</a>` : "Schemat symulowany."}</p>${v.source === "camera" ? "</section>" : ""}${active
+    `<span class="result ${active ? "active" : v.outcome}">${active ? "Wizyta trwa" : escape(state.outcomes[v.outcome])}</span><div class="detail-stats"><div><span>${v.source === "camera" ? "Pierwsza obserwacja" : "Wejście"} · ${dateLabel(v.entered_at)}</span><strong>${time(v.entered_at, true)}</strong></div><div><span>${v.source === "camera" ? "Ostatnia obserwacja" : "Wyjście"}</span><strong>${time(v.exited_at, true)}</strong></div><div><span>${v.source === "camera" ? "Obserwowany okres" : "Czas w kuwecie"}</span><strong ${active ? `data-duration="${v.id}"` : ""}>${duration(v)}</strong></div></div>${focusEvidence(v)}${v.source === "camera" ? `<section class="saved-visit-assessment"><h3>${v.reviewed_at ? "Zapisana ocena użytkownika · M/K" : "Zapisany wynik wizyty"}</h3><p>${v.reviewed_at ? "Poniższy schemat przedstawia Twoje zapisane oznaczenia. Automatyczna analiza miejsca oddania moczu i kału jest wyłączona." : "Schemat przedstawia zapisany wynik analizy wizyty."}</p>` : ""}<div class="detail-map">${mapSvg({ id: v.box_id }, [v], active ? v : null, true)}</div><p class="detail-note">${v.source === "camera" && v.reviewed_at ? "<strong>Zapisana wcześniej ocena</strong><br>" : ""}${explanation}<br>Mocz: <strong>${locationLabel(v, "urine")}</strong>. Kał: <strong>${locationLabel(v, "feces")}</strong>. ${v.source === "camera" ? `Film źródłowy znajdziesz w sekcji nagrań. <a href="/api/recordings/${v.id.split("-")[0]}/video" target="_blank" rel="noopener">Otwórz film</a>` : "Schemat symulowany."}</p>${v.source === "camera" ? "</section>" : ""}${active
         ? ""
         : `<form id="review-form" class="review-form"><h3>Twoja ocena</h3><input type="hidden" name="urine_point" value="${escape(v.urine_point ? JSON.stringify(v.urine_point) : "")}"><input type="hidden" name="feces_point" value="${escape(v.feces_point ? JSON.stringify(v.feces_point) : "")}">${v.source === "camera" ? `<label>Kot<select name="cat_id">${["unknown", "kefir", "kalinka"].map(id => `<option value="${id}" ${id === v.cat_id ? "selected" : ""}>${catName(id)}</option>`).join("")}</select></label>` : ""}<label>Wynik<select name="outcome">${Object.entries(
             state.outcomes,
@@ -521,16 +504,6 @@ function openVisit(id, refresh = false) {
             )}</select></label>${v.source === "camera" ? reviewLocationEditor(v) : `<label>Miejsce moczu<select name="region"><option value="">Nieustalone</option>${state.regions.map((r, i) => `<option value="${i}" ${i === v.region ? "selected" : ""}>${escape(r)}</option>`).join("")}</select></label><label>Miejsce kału<select name="feces_region"><option value="">Nieustalone</option>${state.regions.map((r, i) => `<option value="${i}" ${i === v.feces_region ? "selected" : ""}>${escape(r)}</option>`).join("")}</select></label>`}<label>Notatka<textarea name="note" maxlength="1000" placeholder="Dodaj obserwację do tej wizyty…">${escape(v.source === "camera" && !v.reviewed_at ? "" : v.note)}</textarea></label><div class="review-actions"><span>${v.reviewed_at ? `Ostatnia ocena: ${time(v.reviewed_at)}. ` : ""}${v.source === "mock" ? "Ocena pozostanie oznaczona jako testowa." : "Ręczna ocena rzeczywistego nagrania."}</span><button class="button primary" type="submit">Zapisz ocenę</button></div><p class="form-feedback" id="review-feedback" role="status"></p></form>`
     }`;
   updateLocationMarkers();
-  if (v.segments?.length > 1) {
-    const selector = document.createElement("label");
-    selector.textContent = "Klatki do poprawy położenia Z";
-    const select = document.createElement("select");
-    v.segments.forEach((segment, i) => select.add(new Option(`Fragment ${i + 1} · kuweta ${segment.box_id || v.box_id} · ${time(segment.entered_at, true)}`, segment.id)));
-    select.addEventListener("change", () => loadTailEditor(select.value, catName(v.cat_id)));
-    selector.append(select);
-    $("#tail-editor").before(selector);
-  }
-  if (v.source === "camera") loadTailEditor(v.id, catName(v.cat_id));
   if (!refresh && !$("#visit-dialog").open) $("#visit-dialog").showModal();
 }
 function setConnected(value) {

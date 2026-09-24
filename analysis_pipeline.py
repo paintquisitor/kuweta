@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 
 from qwen import ModelUnavailable, analyze_images
 from recordings import iso
-from focus_analysis import bounds, inspect_focus
+from focus_analysis import bounds
 from cat_identity import identify_visit
 
 STEP = 2  # Seconds; observed intervals are approximate, never exact entry/exit.
@@ -30,11 +30,17 @@ def download_error(reply):
           'Nie udało się pobrać filmu z kamery. Brak poprawnej lokalnej kopii; Qwen nie analizował filmu.')
 
 
-def structured(images, context, *, task='litter'):
+def structured(images, context, *, task='presence'):
     text = analyze_images(images, context, json_output=True, task=task).strip()
     if text.startswith('```'):
         text = text.split('\n', 1)[1].rsplit('```', 1)[0].strip()
-    result = json.loads(text)
+    # Some Qwen responses append a stray backtick or short explanation after
+    # an otherwise complete JSON object. Decode one object and let the strict
+    # schema checks below reject incomplete or malformed model results.
+    start = text.find('{')
+    if start < 0:
+        raise ValueError('Invalid model response')
+    result, _ = json.JSONDecoder().raw_decode(text[start:])
     if not isinstance(result, dict):
         raise ValueError('Invalid model response')
     return result
@@ -88,12 +94,16 @@ def validate_presence(reply, count):
 
 
 def observe_presence(path, second, regions):
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             return _observe_presence(path, second, regions)
         except ValueError:
-            if attempt:
-                raise
+            if attempt == 2:
+                # A malformed model reply affects this sample, not the whole
+                # recording. Mark both trays uncertain so no false visit or
+                # "no cat" conclusion is inferred from missing evidence.
+                return dict(cat_visible=False, boxes=[], uncertain=True,
+                            uncertain_boxes=[1, 2], rear=[])
 
 
 def _observe_presence(path, second, regions):
@@ -107,11 +117,8 @@ def _observe_presence(path, second, regions):
         'Sama głowa, łapa lub ogon kota stojącego obok nie oznacza zajętej kuwety. '
         'Człowiek nie jest kotem. Przy zasłonięciu lub dwóch kotach w jednej kuwecie uncertain=true. '
         'Nie identyfikuj kota ani rodzaju odchodów. Zwróć WYŁĄCZNIE JSON, dokładnie dwa elementy: '
-        '{"frames":[{"occupied":false,"uncertain":false,"tail_base_point":null},'
-        '{"occupied":false,"uncertain":false,"tail_base_point":null}]}. '
-        'Jeśli widzisz nasadę ogona, tail_base_point=[x,y], współrzędne 0–1 względem '
-        'TEGO WYCINKA. To połączenie ogona z tułowiem, nie głowa ani koniec ogona. '
-        'Przy braku kota lub niepewnej lokalizacji tail_base_point=null.')
+        '{"frames":[{"occupied":false,"uncertain":false},'
+        '{"occupied":false,"uncertain":false}]}', task='presence')
     samples = reply.get('frames')
     if not isinstance(samples, list) or len(samples) != len(boxes):
         raise ValueError('Missing tray observations')
@@ -125,12 +132,6 @@ def _observe_presence(path, second, regions):
             continue
         observation['cat_visible'] = True
         observation['boxes'].append(box['id'])
-        point = sample.get('tail_base_point')
-        if (not sample['uncertain'] and isinstance(point, list) and len(point) == 2
-                and all(type(n) in (int, float) and math.isfinite(n) and 0 <= n <= 1 for n in point)):
-            x0, y0, x1, y1 = bounds(box['points'])
-            observation['rear'].append({'box_id': box['id'],
-                'point': [x0 + point[0]*(x1-x0), y0 + point[1]*(y1-y0)]})
     return observation
 
 
@@ -190,43 +191,11 @@ def analyze_recording(path, regions, stopped=lambda: False, progress=lambda mess
     for index, visit in enumerate(visits):
         if stopped():
             raise InterruptedError()
-        progress('Porównywanie żwirku przed i po obserwowanej wizycie')
         first, last = visit['first'], visit['last']
-        before, after = max(0, first - STEP), min(duration - .15, last + STEP)
-        sample_times = sorted(set([before, first, (first + last) / 2, last, after]))
         crop = next(b['points'] for b in regions['boxes'] if b['id'] == visit['box_id'])
-        reply = structured([frame(path, t, crop) for t in sample_times],
-            'To wycinki JEDNEJ kuwety, chronologicznie. Sekundy: ' + json.dumps(sample_times) +
-            '. Zwróć tylko JSON: {"before_after_clear":false,"urine":false,"feces":false,'
-            '"urine_region":null,"feces_region":null,"notes":"opis dowodów i ograniczeń po polsku"}. '
-            'before_after_clear=true tylko gdy widać ten sam obszar żwirku bez kota przed wizytą i po niej. '
-            'urine=true tylko przy nowej widocznej mokrej plamie z porównania, feces=true przy nowych '
-            'widocznych odchodach. Cień, kopanie, kucanie, stare zabrudzenia nie wystarczą. '
-            'Jeśli brak materiału przed/po lub kot zasłania, ustaw before_after_clear=false. '
-            'region to siatka 3x3 na wycinku: 0,1,2 górny rząd obrazu; 3,4,5 środek; 6,7,8 dół. '
-            'Nie ustalaj tożsamości ani diagnozy.')
-        visit.update(waste_result(reply))
-        focus = inspect_focus(path, observations, visit, crop, duration, index, frame, structured,
-                              waste_result, stopped, progress)
-        visit['focus'] = focus
-        kinds = set()
-        if visit['outcome'] in ('urine', 'both'):
-            kinds.add('urine')
-        if visit['outcome'] in ('feces', 'both'):
-            kinds.add('feces')
-        for evidence in focus['evidence']:
-            kinds.add(evidence['kind'])
-            visit['region' if evidence['kind'] == 'urine' else 'feces_region'] = evidence['region']
-        visit['outcome'] = 'both' if len(kinds) == 2 else next(iter(kinds), 'uncertain')
-        if focus['windows']:
-            visit['note'] += (f" Analiza stałego obszaru: {focus['checked_frames']} wybranych klatek "
-                              f"z {focus['decoded_frames']} próbek co 0,2 s. "
-                              + ('Osiągnięto limit 3 fragmentów; materiał wymaga sprawdzenia. ' if focus['limited'] else '')
-                              + ' '.join(e['note'] for e in focus['evidence']))
-        else:
-            visit['note'] += ' Nie ustalono stabilnego obszaru pod zadem; brak dokładniejszej analizy tego miejsca.'
-        if first == 0 or last + STEP + .15 >= duration:
-            visit.update(outcome='uncertain', region=None, feces_region=None)
+        visit.update(outcome='uncertain', region=None, feces_region=None,
+                     focus={'enabled': False},
+                     note='Analiza nasady ogona, moczu i kału jest wyłączona. Wynik możesz ocenić ręcznie.')
         identity = {'cat_id': 'unknown', 'reason': 'Brak wzorców kotów.'}
         if identity_profiles is not None:
             progress('Porównywanie sylwetki i ogona ze wzorcami Kalinki i Kefira')
@@ -273,12 +242,13 @@ def join_visit_segments(visits):
                     parent[field] = visit[field]
             parent['original_outcome'] = parent['outcome']
         owners[visit['id']] = parent
-    # A recording is one toilet session for a recognised cat. Tray changes are
-    # observations within that session, including separately reviewed observations.
+    # The camera creates one clip for one toilet session. Split presence intervals
+    # (including box changes and uncertain identity fragments) are observations
+    # within that session, not separate visits.
     groups, sessions = {}, []
     for visit in combined:
-        key = (visit['id'].split('-')[0], visit['cat_id'])
-        eligible = visit.get('source') == 'camera' and visit['cat_id'] in ('kefir', 'kalinka')
+        key = visit['id'].split('-')[0]
+        eligible = visit.get('source') == 'camera' and len(key) == 24
         if not eligible or key not in groups:
             sessions.append(visit)
             if eligible:
@@ -294,7 +264,7 @@ def join_visit_segments(visits):
         # Keep evidence and location attached to its original tray. The newest
         # manual review is the session assessment; all other reviews stay in parts.
         if visit.get('reviewed_at') and visit['reviewed_at'] > (parent.get('reviewed_at') or ''):
-            for field in ('id', 'outcome', 'reviewed_at', 'note', 'box_id', 'region',
+            for field in ('id', 'cat_id', 'outcome', 'reviewed_at', 'note', 'box_id', 'region',
                           'feces_region', 'urine_point', 'feces_point'):
                 parent[field] = visit.get(field)
         elif not parent.get('reviewed_at'):
@@ -305,6 +275,12 @@ def join_visit_segments(visits):
             if len(parent['box_ids']) > 1:
                 for field in ('region', 'feces_region', 'urine_point', 'feces_point'):
                     parent[field] = None
+        # Prefer a recognized identity over unknown fragments. If model labels
+        # vary within the same clip, use the most frequent recognized label.
+        if not any(p.get('reviewed_at') for p in parts):
+            identities = [p.get('cat_id') for p in parts if p.get('cat_id') in ('kefir', 'kalinka')]
+            if identities:
+                parent['cat_id'] = max(('kefir', 'kalinka'), key=lambda cat: (identities.count(cat), -identities.index(cat) if cat in identities else 0))
     return sorted(sessions, key=lambda v: v['entered_at'], reverse=True)
 
 
