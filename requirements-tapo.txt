@@ -1,0 +1,2 @@
+pytapo==3.4.19
+aiofiles==24.1.0

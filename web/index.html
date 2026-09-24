@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#365a46" />
+    <meta
+      name="description"
+      content="Lokalny monitor dwóch kuwet Kefira i Kalinki. Historia wizyt, mapy miejsc i powiadomienia."
+    />
+    <title>Kuweta · Kefir i Kalinka</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Kuweta — strona główna"
+        ><span class="brand-icon">⌂</span> kuweta<span class="brand-dot"
+          >.</span
+        ></a
+      >
+      <div class="top-actions">
+        <span id="connection" class="connection">Łączenie…</span
+        ><button id="notify-button" class="button quiet">
+          Włącz powiadomienia
+        </button>
+      </div>
+    </header>
+    <main>
+      <div class="demo-banner">
+        <span class="pill amber">Analiza nagrań</span
+        ><span
+          >Nowe filmy są pobierane i analizowane automatycznie. Koty są porównywane z zapisanymi wzorcami; niepewne rozpoznania wymagają Twojej oceny. <label><input type="checkbox" id="show-mock"> Pokaż także symulacje</label></span
+        >
+      </div>
+      <div id="error-banner" role="alert" hidden></div>
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow" id="today">DOMOWY MONITOR</p>
+          <h1>Dzisiaj u Kefira i Kalinki</h1>
+        </div>
+        <a class="button secondary" href="/api/export.csv">↓ Eksport wizyt</a>
+      </section>
+      <section class="camera-panel panel" aria-label="Podgląd kamery">
+        <div class="section-heading">
+          <h2>Kamera · Tapo C560WS</h2>
+          <span class="pill neutral">Obraz z kamery</span>
+        </div>
+        <p id="camera-status" role="status">Łączenie z kamerą…</p>
+        <div class="camera-stage">
+          <img id="camera-preview" alt="Bieżący obraz z kamery Tapo" hidden />
+          <svg id="camera-regions" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="Zaznaczone obszary kuwet"></svg>
+        </div>
+        <div class="camera-controls">
+          <button class="button secondary" id="mark-box-1">Zaznacz kuwetę 01 · czarną</button>
+          <button class="button secondary" id="mark-box-2">Zaznacz kuwetę 02 · jasną</button>
+          <button class="button primary" id="save-regions" disabled>Zapisz obszary</button>
+          <button class="button quiet" id="cancel-regions" hidden>Anuluj zmiany</button>
+        </div>
+        <p id="regions-status" role="status">Wczytywanie obszarów…</p>
+        <p class="muted">Obszary odpowiadają obecnemu kadrowi. Po obrocie kamery lub przesunięciu kuwet zaznacz je ponownie.</p>
+        <p class="muted">Podgląd odświeżany co około sekundę. Wizyty są rozpoznawane po pobraniu nowych nagrań z kamery.</p>
+      </section>
+      <section class="camera-panel panel" aria-label="Nagrania z karty kamery">
+        <div class="section-heading"><h2>Nagrania z kamery</h2><span class="pill neutral">Karta microSD</span></div>
+        <p id="recordings-status" role="status">Oczekiwanie na sprawdzenie nagrań…</p>
+        <p class="muted">Czas nagrania pochodzi z kamery. Wejście i wyjście kota wymagają analizy filmu; nagranie nie jest jeszcze wizytą.</p>
+        <ul id="camera-recordings" class="notices"></ul>
+      </section>
+      <section id="cat-cards" class="cat-cards" aria-label="Podsumowanie kotów">
+        <div class="loading">Wczytywanie historii…</div>
+      </section>
+      <div class="workspace">
+        <section class="monitor-panel">
+          <div class="section-heading">
+            <h2>Twoje kuwety <span class="count">02</span></h2>
+            <span class="muted">Mapa moczu i kału</span>
+          </div>
+          <div id="boxes" class="boxes"></div>
+          <p class="map-caption">
+            <span class="legend-dot kefir"></span> Kefir
+            <span class="legend-dot kalinka"></span> Kalinka
+            <span class="map-help"
+              >M = mocz (owal), K = kał (prostokąt), P = propozycja miejsca z pozycji kota — do oceny. Kliknij oznaczenie. Obraz jest schematem.</span
+            >
+          </p>
+        </section>
+        <aside class="simulator panel">
+          <div class="section-heading">
+            <h2>Sprawdź wizytę</h2>
+            <span class="pill neutral">Symulator</span>
+          </div>
+          <p class="muted simulator-intro">
+            Wybierz scenariusz. Wizyta potrwa około 8 sekund.
+          </p>
+          <form id="simulation-form">
+            <div class="form-row">
+              <label
+                >Kot<select name="cat_id">
+                  <option value="kefir">Kefir</option>
+                  <option value="kalinka">Kalinka</option>
+                </select></label
+              ><label
+                >Kuweta<select name="box_id">
+                  <option value="1">Kuweta 01</option>
+                  <option value="2">Kuweta 02</option>
+                </select></label
+              >
+            </div>
+            <label
+              >Przebieg wizyty<select name="scenario" id="scenario">
+                <option value="urine">Mocz — mokra plama</option>
+                <option value="feces">Kał — bryły odchodów</option>
+                <option value="both">Mocz i kał podczas jednej wizyty</option>
+                <option value="empty">Tylko wejście i wyjście</option>
+                <option value="uncertain">Nie widać wyniku wizyty</option>
+              </select></label
+            >
+            <fieldset id="region-field">
+              <legend>
+                Miejsce moczu <span class="muted">· widok z góry</span>
+              </legend>
+              <div id="region-picker" class="region-picker"></div>
+              <span class="entry-label">WEJŚCIE DO KUWETY</span>
+            </fieldset>
+            <label id="feces-location" hidden>Miejsce kału<select name="feces_region"><option value="0">lewy tył</option><option value="1">środek z tyłu</option><option value="2">prawy tył</option><option value="3">lewy środek</option><option value="4">środek</option><option value="5">prawy środek</option><option value="6">lewy przód</option><option value="7">środek z przodu</option><option value="8">prawy przód</option></select></label>
+            <button class="button primary" id="simulate-button" type="submit">
+              <span>▶</span> Uruchom wizytę
+            </button>
+            <p id="simulation-feedback" class="form-feedback" role="status"></p>
+          </form>
+        </aside>
+      </div>
+      <div class="bottom-grid">
+        <section class="history panel">
+          <div class="section-heading">
+            <h2>Historia wizyt</h2>
+            <div class="filters">
+              <label class="sr-only" for="cat-filter">Filtr kota</label
+              ><select id="cat-filter">
+                <option value="all">Wszystkie koty</option><option value="unknown">Kot nierozpoznany</option>
+                <option value="kefir">Kefir</option>
+                <option value="kalinka">Kalinka</option></select
+              ><label class="sr-only" for="result-filter">Filtr wyniku</label
+              ><select id="result-filter">
+                <option value="all">Wszystkie wyniki</option>
+                <option value="urine">Prawdopodobny mocz</option>
+                <option value="feces">Prawdopodobny kał</option>
+                <option value="both">Prawdopodobny mocz i kał</option>
+                <option value="confirmed">Mocz potwierdzony ręcznie</option>
+                <option value="feces_confirmed">Kał potwierdzony ręcznie</option>
+                <option value="both_confirmed">Mocz i kał potwierdzone ręcznie</option>
+                <option value="empty">Bez oznak moczu ani kału</option>
+                <option value="uncertain">Niepewne</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Kot / kuweta</th>
+                  <th>Wejście → wyjście</th>
+                  <th>Czas</th>
+                  <th>Wynik</th>
+                  <th><span class="sr-only">Szczegóły</span></th>
+                </tr>
+              </thead>
+              <tbody id="visits"></tbody>
+            </table>
+          </div>
+          <p class="table-footer" id="visit-count"></p>
+        </section>
+        <aside class="notifications panel">
+          <div class="section-heading">
+            <h2>Powiadomienia</h2>
+            <span class="live-dot" aria-label="Na żywo"></span>
+          </div>
+          <ol id="notices"></ol>
+        </aside>
+      </div>
+      <footer>
+        <span>Kefir & Kalinka · dane zapisane lokalnie</span
+        ><span id="qwen-status"
+          >Qwen: adapter gotowy, nieużywany w symulacji</span
+        >
+      </footer>
+    </main>
+    <dialog id="cat-profile-dialog" aria-labelledby="cat-profile-title">
+      <div class="dialog-header">
+        <div><p class="eyebrow">PROFIL KOTA</p><h2 id="cat-profile-title"></h2></div>
+        <button class="icon-button" id="close-cat-profile" aria-label="Zamknij profil kota">×</button>
+      </div>
+      <div id="cat-profile-content"></div>
+    </dialog>
+    <dialog id="visit-dialog" aria-labelledby="detail-title">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">WIZYTA TESTOWA</p>
+          <h2 id="detail-title">Szczegóły wizyty</h2>
+        </div>
+        <button
+          class="icon-button"
+          id="close-dialog"
+          aria-label="Zamknij szczegóły"
+        >
+          ×
+        </button>
+      </div>
+      <div id="visit-detail"></div>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>
