@@ -77,6 +77,18 @@ class AppTests(unittest.TestCase):
             self.assertEqual(self.request(f'/api/recordings/{key}/evidence/visit-0-anatomy-1.jpg')[0], 404)
             self.assertEqual(self.request(f'/api/recordings/{key}/evidence/../../.env')[0], 404)
 
+        # Identical recording IDs in a new database must serve its own evidence.
+        experiment = Path(self.temp.name) / 'experiment' / key
+        experiment.mkdir(parents=True)
+        (experiment / 'recording.mp4').write_bytes(b'experiment-video')
+        (experiment / 'visit-0-urine.jpg').write_bytes(b'new-evidence')
+        with patch('server.ROOT', Path(self.temp.name)), \
+             patch.dict(os.environ, {'KUWETA_RECORDINGS_DIR': 'experiment'}):
+            self.assertEqual(self.request(f'/api/recordings/{key}/video'), (200, b'experiment-video'))
+            self.assertEqual(self.request(f'/api/recordings/{key}/evidence/visit-0-urine.jpg'), (200, b'new-evidence'))
+            self.assertEqual(self.request(f'/api/recordings/{key}/evidence/visit-0-posture-0.jpg')[0], 404)
+        self.assertEqual((path.parent / 'visit-0-urine.jpg').read_bytes(), b'jpeg-evidence')
+
     def test_tail_labels_are_separate_persistent_and_bound_to_exact_frame(self):
         key = 'c' * 24
         visit_id = key + '-0'

@@ -13,6 +13,7 @@ from qwen import ModelUnavailable, analyze_images
 from recordings import iso
 from focus_analysis import bounds, inspect_focus
 from cat_identity import identify_visit
+from runtime_paths import recordings_path
 
 STEP = 2  # Seconds; observed intervals are approximate, never exact entry/exit.
 
@@ -428,7 +429,7 @@ class AnalysisPipeline:
 
     def process(self, row):
         key = hashlib.sha256(f"{row['camera_host']}:{row['start_epoch']}:{row['end_epoch']}".encode()).hexdigest()[:24]
-        folder = self.root / 'data' / 'recordings' / 'processed' / key
+        folder = recordings_path(self.root) / key
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / 'recording.mp4'
         expected = row['end_epoch'] - row['start_epoch']

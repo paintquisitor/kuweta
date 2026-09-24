@@ -25,6 +25,7 @@ from qwen import configuration
 from camera import CameraPreview
 from recordings import RecordingIndex, RecordingMonitor
 from analysis_pipeline import AnalysisPipeline, join_visit_segments
+from runtime_paths import recordings_path
 
 CATS = [{"id": "kefir", "name": "Kefir", "description": "Masywny tułów, mniej puszysty ogon", "color": "sage"},
         {"id": "kalinka", "name": "Kalinka", "description": "Smukła sylwetka, duży puszysty ogon", "color": "peach"}]
@@ -116,7 +117,7 @@ class Store:
                 name = check.get('file', '')
                 if not re.fullmatch(r'visit-\d+-anatomy-\d+\.jpg', name):
                     continue
-                image = ROOT / 'data' / 'recordings' / 'processed' / match[1] / name
+                image = recordings_path(ROOT) / match[1] / name
                 if not image.is_file():
                     continue
                 digest = hashlib.sha256(image.read_bytes()).hexdigest()
@@ -347,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
                            for s in v.get('focus', {}).get('suggestions', []))
             allowed.update(s.get('file') for v in analysis.get('visits', [])
                            for s in v.get('focus', {}).get('pose_checks', []))
-            file = ROOT / 'data' / 'recordings' / 'processed' / evidence[1] / evidence[2]
+            file = recordings_path(ROOT) / evidence[1] / evidence[2]
             if evidence[2] not in allowed or not file.is_file():
                 return self.send(404, {'error': 'Brak klatki dowodowej.'})
             return self.send(200, file.read_bytes(), 'image/jpeg')
@@ -355,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
         if media:
             with self.server.store.lock:
                 exists = self.server.store.db.execute('SELECT 1 FROM camera_recordings WHERE media_key=?', (media[1],)).fetchone()
-            file = ROOT / 'data' / 'recordings' / 'processed' / media[1] / 'recording.mp4'
+            file = recordings_path(ROOT) / media[1] / 'recording.mp4'
             if not exists or not file.is_file():
                 return self.send(404, {'error': 'Brak nagrania.'})
             size = file.stat().st_size
@@ -511,7 +512,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--db", default=str(ROOT / "data" / "kuweta.sqlite3"))
+    parser.add_argument("--db", default=str(ROOT / os.getenv("KUWETA_DB_PATH", "data/kuweta.sqlite3")))
     args = parser.parse_args()
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     server = create_server(args.db, args.host, args.port)

@@ -12,6 +12,8 @@ Gałąź `codex/opencv-analysis` dodaje wybór klatek przez OpenCV. Instalacja w
 
 Ustaw `PRESENCE_ENGINE=opencv` w `.env` i uruchom serwer przez `.venv-tapo/bin/python server.py`. Powrót do poprzedniej analizy: `PRESENCE_ENGINE=qwen` i restart. Zmiana dotyczy kolejnych analiz, nie przelicza zapisanych ocen. Aktualny tryb widać pod podglądem kamery.
 
+Oddzielną bazę i zdjęcia wynikowe wybierają `KUWETA_DB_PATH=data/kuweta-opencv.sqlite3` oraz `KUWETA_RECORDINGS_DIR=data/recordings-opencv/processed` w `.env`. Ustaw oba pola razem, aby eksperyment nie nadpisywał zdjęć wcześniejszych ocen. `--db` ma pierwszeństwo przed ustawieniem bazy. Powrót do starej historii: usuń oba pola i zrestartuj serwer. Sama zmiana gałęzi Git nie przełącza lokalnego `.env`.
+
 OpenCV porównuje zamaskowane obszary kuwet co 2 s, wybiera zmiany obrazu oraz klatki kontrolne co najwyżej 10 s. Qwen sprawdza obecność w wybranych klatkach. Tylko zgodne oceny obu końców stabilnego fragmentu pozwalają zachować obecność pomiędzy nimi; rozbieżność lub niepewność wymusza sprawdzenie pozostałych klatek. Nieruchomy kot jest sprawdzany także na początku filmu. Punkty nasady ogona nie są kopiowane między klatkami.
 
 To redukcja liczby wywołań modelu, a nie samodzielny detektor kotów. Ruch, cień i zmiana żwirku nie potwierdzają wizyty ani moczu. Qwen nadal odpowiada za identyfikację, anatomię i ocenę śladów. Błędy Qwena mogą pozostać; krótka lub słabo widoczna zmiana może umknąć próbkowaniu. Przy intensywnym ruchu oszczędność może być mała. Podsumowanie nagrania pokazuje rzeczywistą liczbę klatek sprawdzonych modelem.
