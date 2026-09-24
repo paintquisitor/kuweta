@@ -51,6 +51,10 @@ def focus_windows(observations, visit, polygon, duration):
     for o in observations:
         if not visit['first'] <= o['t'] <= visit['last'] + 2:
             continue
+        if o.get('presence_source') == 'opencv_bridge' and visit['box_id'] in o['boxes']:
+            # This frame confirms only continuity of a visually stable interval.
+            # Compare real landmark samples on its two independently checked ends.
+            continue
         point = rear_point(o, visit['box_id'], polygon)
         anchor = stable[0]['point'] if stable else None
         moved = anchor and (point is None or math.hypot(

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import os
 import subprocess
 import threading
 import time
@@ -34,7 +35,14 @@ def structured(images, context, *, task='litter'):
     text = analyze_images(images, context, json_output=True, task=task).strip()
     if text.startswith('```'):
         text = text.split('\n', 1)[1].rsplit('```', 1)[0].strip()
-    result = json.loads(text)
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        # Qwen sometimes appends a single stray quote to an otherwise complete
+        # JSON object. Accept only this narrow case, never a second response.
+        result, end = json.JSONDecoder().raw_decode(text)
+        if text[end:].strip() != '"':
+            raise ValueError('Invalid model response') from None
     if not isinstance(result, dict):
         raise ValueError('Invalid model response')
     return result
@@ -172,7 +180,7 @@ def waste_result(reply):
             'note': reply['notes']}
 
 
-def analyze_recording(path, regions, stopped=lambda: False, progress=lambda message: None, *, identity_profiles=None):
+def analyze_recording(path, regions, stopped=lambda: False, progress=lambda message: None, *, identity_profiles=None, presence_engine=None):
     path = Path(path)
     duration = probe(path)
     if duration > 600:
@@ -180,12 +188,25 @@ def analyze_recording(path, regions, stopped=lambda: False, progress=lambda mess
     if len(regions.get('boxes', [])) != 2:
         raise ValueError('Calibrate both trays')
     times = [float(t) for t in range(0, math.ceil(duration), STEP) if t < duration - .1]
-    observations = []
-    for start, t in enumerate(times):
-        if stopped():
-            raise InterruptedError()
-        progress(f'Analiza obecności: {min(start + 1, len(times))}/{len(times)} klatek')
-        observations.append(dict(observe_presence(path, t, regions), t=t))
+    engine = presence_engine or os.getenv('PRESENCE_ENGINE', 'qwen')
+    presence_stats = None
+    if engine == 'opencv':
+        from opencv_presence import observe_recording, METHOD
+        try:
+            observations, presence_stats = observe_recording(path, regions, times, observe_presence, stopped, progress)
+        except RuntimeError as error:
+            raise ProcessingError(str(error)) from None
+        method = METHOD
+    elif engine == 'qwen':
+        method = 'separate_tray_crops_v1'
+        observations = []
+        for start, t in enumerate(times):
+            if stopped():
+                raise InterruptedError()
+            progress(f'Analiza obecności: {min(start + 1, len(times))}/{len(times)} klatek')
+            observations.append(dict(observe_presence(path, t, regions), t=t))
+    else:
+        raise ProcessingError('Nieznany PRESENCE_ENGINE. Wybierz qwen lub opencv.')
     visits = intervals(observations)
     for index, visit in enumerate(visits):
         if stopped():
@@ -241,10 +262,12 @@ def analyze_recording(path, regions, stopped=lambda: False, progress=lambda mess
                          + ('Wizyta może wykraczać poza nagranie. ' if first == 0 or last + STEP + .15 >= duration else '')
                          + visit['note'])
     status = 'analyzed' if visits else 'needs_review' if any(o['cat_visible'] or o['uncertain'] or o.get('uncertain_boxes') for o in observations) else 'no_cat_observed'
+    sampling_note = (f"OpenCV + Qwen: sprawdzono modelem {presence_stats['qwen_presence_frames']}/{len(times)} klatek obecności. "
+                     if presence_stats else '')
     return {'status': status, 'visits': visits, 'observations': observations,
-            'presence_method': 'separate_tray_crops_v1', 'duration_seconds': duration,
+            'presence_method': method, 'presence_stats': presence_stats, 'duration_seconds': duration,
             'sample_interval_seconds': STEP, 'model': __import__('os').getenv('QWEN_MODEL', ''),
-            'regions': regions, 'summary': f'Przeanalizowano {len(times)} klatek; potencjalne wizyty: {len(visits)}. '
+            'regions': regions, 'summary': sampling_note + f'Przeanalizowano {len(times)} klatek; fragmenty obecności: {len(visits)}. '
             'Krótkie zdarzenia między klatkami mogły zostać pominięte.'}
 
 
@@ -363,7 +386,7 @@ class AnalysisPipeline:
             return None
         analysis = json.loads(previous['analysis'])
         # Old full-frame observations were too unreliable for boundary linking.
-        if analysis.get('presence_method') != 'separate_tray_crops_v1':
+        if analysis.get('presence_method') not in ('separate_tray_crops_v1', 'opencv_verified_presence_v1'):
             return None
         duration = analysis.get('duration_seconds', previous['end_epoch'] - previous['start_epoch'])
         for index, part in enumerate(analysis.get('visits', [])):
@@ -462,7 +485,7 @@ class AnalysisPipeline:
             result = analyze_recording(path, self.store.camera_regions(), self.stop.is_set,
                                       lambda message: self.update(row, error=message),
                                       identity_profiles=self.root / 'data' / 'cat_profiles' / 'manifest.json')
-        except (ModelUnavailable, InterruptedError):
+        except (ModelUnavailable, InterruptedError, ProcessingError):
             raise
         except HTTPError as error:
             raise ProcessingError(f'Film pobrany i zachowany. Qwen odrzucił zapytanie analizy (HTTP {error.code}).') from None

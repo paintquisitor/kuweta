@@ -246,7 +246,7 @@ function acceptState(next) {
   $("#qwen-status").textContent = next.qwen.configured
     ? (next.recordings?.items.some(r => r.status === "waiting_model")
       ? "Qwen: nagrania oczekują na model · automatyczne ponawianie co minutę"
-      : `Qwen: ${next.qwen.model} · automatyczna analiza nagrań · wyniki do weryfikacji`)
+      : `${next.qwen.presence_engine === "opencv" ? "OpenCV + Qwen" : "Qwen"}: ${next.qwen.model} · automatyczna analiza nagrań · wyniki do weryfikacji`)
     : "Qwen: adapter gotowy · połączenie nieskonfigurowane";
   $("#today").textContent = new Date()
     .toLocaleDateString("pl-PL", {

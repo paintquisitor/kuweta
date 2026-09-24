@@ -2,6 +2,29 @@
 
 Lokalna aplikacja do monitorowania dwóch kuwet z podglądem kamery RTSP. Nowe nagrania są pobierane i analizowane przez lokalnego Qwena. Wyniki próbne trafiają do historii. Symulacje są osobno oznaczone i domyślnie ukryte.
 
+## Eksperymentalna analiza OpenCV + Qwen
+
+Gałąź `codex/opencv-analysis` dodaje wybór klatek przez OpenCV. Instalacja w istniejącym środowisku:
+
+```sh
+.venv-tapo/bin/pip install -r requirements-opencv.txt
+```
+
+Ustaw `PRESENCE_ENGINE=opencv` w `.env` i uruchom serwer przez `.venv-tapo/bin/python server.py`. Powrót do poprzedniej analizy: `PRESENCE_ENGINE=qwen` i restart. Zmiana dotyczy kolejnych analiz, nie przelicza zapisanych ocen. Aktualny tryb widać pod podglądem kamery.
+
+OpenCV porównuje zamaskowane obszary kuwet co 2 s, wybiera zmiany obrazu oraz klatki kontrolne co najwyżej 10 s. Qwen sprawdza obecność w wybranych klatkach. Tylko zgodne oceny obu końców stabilnego fragmentu pozwalają zachować obecność pomiędzy nimi; rozbieżność lub niepewność wymusza sprawdzenie pozostałych klatek. Nieruchomy kot jest sprawdzany także na początku filmu. Punkty nasady ogona nie są kopiowane między klatkami.
+
+To redukcja liczby wywołań modelu, a nie samodzielny detektor kotów. Ruch, cień i zmiana żwirku nie potwierdzają wizyty ani moczu. Qwen nadal odpowiada za identyfikację, anatomię i ocenę śladów. Błędy Qwena mogą pozostać; krótka lub słabo widoczna zmiana może umknąć próbkowaniu. Przy intensywnym ruchu oszczędność może być mała. Podsumowanie nagrania pokazuje rzeczywistą liczbę klatek sprawdzonych modelem.
+
+Próba na lokalnym filmie bez zmiany historii (wyniki i zdjęcia w nowym katalogu):
+
+```sh
+.venv-tapo/bin/python opencv_trial.py data/recordings/processed/ID/recording.mp4 --output data/opencv-trial/proba-1
+.venv-tapo/bin/python -m unittest discover -s tests -q
+```
+
+Próba używa aktualnej kalibracji kuwet. Starszy film z innego ustawienia kamery wymaga właściwej kalibracji. Nie pobiera filmów z kamery i nie usuwa danych. Wynik `analysis.json` zawiera także pomiary zmian i informację, które obserwacje pochodziły bezpośrednio z Qwena.
+
 ## Uruchomienie
 
 Wymagany Python 3.10 lub nowszy. Analiza wymaga FFmpeg/ffprobe, środowiska Tapo opisanego poniżej i działającego serwera Qwen z obsługą obrazów.

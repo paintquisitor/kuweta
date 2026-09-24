@@ -16,7 +16,8 @@ class ModelUnavailable(Exception):
 
 def configuration():
     return {"configured": bool(os.getenv("QWEN_BASE_URL")),
-            "model": os.getenv("QWEN_MODEL", "qwen"), "used_in_simulation": False}
+            "model": os.getenv("QWEN_MODEL", "qwen"), "used_in_simulation": False,
+            "presence_engine": os.getenv("PRESENCE_ENGINE", "qwen")}
 
 
 def analyze_images(images, context, *, json_output=False, task='litter', image_labels=None):
